@@ -9,7 +9,26 @@ load_dotenv()
 NUM_RUNS_TIMES = 5
 
 # TODO: Fill this in! Try to get as close to 100% correctness across all runs as possible.
-YOUR_SYSTEM_PROMPT = ""
+YOUR_SYSTEM_PROMPT = """
+Let's work this out step by step.
+
+1. Identify the known values:
+   - Total trip length: 60 miles
+   - First stop location: 20 miles from start
+   - Second stop location: 15 miles before the end
+
+2. Calculate the distance of the second stop from the start:
+   - The second stop is 15 miles before the end, so it is at 60 - 15 = 45 miles from the start.
+
+3. Calculate the distance between the first and second stops:
+   - The first stop is at 20 miles.
+   - The second stop is at 45 miles.
+   - The distance between them is 45 - 20 = 25 miles.
+
+The quantity requested is the length of the segment between the two stops, not the location of either stop,
+
+Final Answer: The distance between the first and second stops is 25 miles.
+"""
 
 USER_PROMPT = """
 Solve this problem, then give the final answer on the last line as "Answer: <number>".

@@ -69,8 +69,21 @@ TOOL_REGISTRY: Dict[str, Callable[..., str]] = {
 # Prompt scaffolding
 # ==========================
 
-# TODO: Fill this in!
-YOUR_SYSTEM_PROMPT = ""
+YOUR_SYSTEM_PROMPT = """
+You are a router. When the user asks you to call the tool, reply with ONE JSON object only.
+No markdown fences, no explanation, no extra keys at the top level.
+
+Required shape (exact key names):
+{"tool": "<string>", "args": {<object>}}
+
+Rules:
+- "tool" must be exactly: output_every_func_return_type
+- "args" must be a JSON object (not an array). Use {} if you have no arguments; the runtime will default file_path to this script.
+- Do not use wrappers like tool_invocation, or rename keys to tool_name/name/function.
+
+Example (match this structure exactly):
+{"tool": "output_every_func_return_type", "args": {}}
+"""
 
 
 def resolve_path(p: str) -> str:

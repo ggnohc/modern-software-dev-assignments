@@ -8,7 +8,15 @@ load_dotenv()
 NUM_RUNS_TIMES = 5
 
 # TODO: Fill this in!
-YOUR_SYSTEM_PROMPT = ""
+YOUR_SYSTEM_PROMPT = r"""
+
+Use chain-of-thought reasoning to solve this problem. Always output your reasoning process step by step, and then give the final answer on the last line as "Answer: <number>".
+
+* explicitly state \(\gcd(3,100)\) and why a standard theorem applies
+* explicitly compute the reduced exponent (mod the right period) with the division shown
+* end with a sanity check (e.g., compare to mod 4 / mod 25 separately, or recompute \(3^{k}\pmod{100}\) in small chunks)
+
+"""
 
 
 USER_PROMPT = """
