@@ -44,10 +44,11 @@ docs/                   # TASKS for agent-driven workflows
 
 ### Quickstart
 
-1) Activate your conda environment.
+1) Activate your virtual environment (created during the top-level `README.md` setup).
 
 ```bash
-conda activate cs146s
+source .venv/bin/activate    # macOS/Linux
+# .venv\Scripts\activate     # Windows
 ```
 
 2) (Optional) Install pre-commit hooks

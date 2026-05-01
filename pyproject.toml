@@ -2,7 +2,7 @@
 name = "modern-software-dev-assignments"
 version = "0.1.0"
 description = "Course assignments with FastAPI + SQLite starter and tooling"
-authors = ["Course <course@example.com>"]
+authors = ["gfoo"]
 readme = "README.md"
 packages = []
 package-mode = false
