@@ -30,6 +30,12 @@ Generated Code Snippets:
 TODO: List all modified code files with the relevant line numbers.
 ```
 
+Design notes to capture (delete this block once filled in):
+- TODO: Which Ollama model did you settle on, and why? (`OLLAMA_MODEL` in `app/services/extract.py`)
+- TODO: Pydantic schema shape — why a wrapper object (`ActionItemList.items`) rather than a bare list?
+- TODO: Error policy chosen — re-raise vs. fall back to the heuristic `extract_action_items()`. What's the tradeoff?
+- TODO: System prompt you used (paste verbatim) and any iteration notes (what didn't work first).
+
 ### Exercise 2: Add Unit Tests
 Prompt: 
 ```
@@ -40,6 +46,10 @@ Generated Code Snippets:
 ```
 TODO: List all modified code files with the relevant line numbers.
 ```
+
+Test design notes (delete this block once filled in):
+- TODO: How did you mock `ollama.chat` so tests don't hit a real daemon? (Hint: monkeypatch `app.services.extract.chat`.)
+- TODO: For the malformed-JSON / connection-error cases, do your tests assert a raised exception or a heuristic-fallback result? Must match your Exercise 1 error policy.
 
 ### Exercise 3: Refactor Existing Code for Clarity
 Prompt: 

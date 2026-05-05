@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
+from collections.abc import Iterable
 from typing import List
-import json
-from typing import Any
-from ollama import chat
+
 from dotenv import load_dotenv
+from ollama import ChatResponse, ResponseError, chat
+from pydantic import BaseModel, ValidationError
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -16,6 +20,20 @@ KEYWORD_PREFIXES = (
     "action:",
     "next:",
 )
+
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+MAX_INPUT_CHARS = 50_000
+
+
+class ActionItemList(BaseModel):
+    """Structured-output schema for the LLM extractor.
+
+    Wraps a list of action item strings in an object so Ollama's `format=`
+    argument receives a top-level JSON Schema object (bare arrays are not
+    universally supported by all models).
+    """
+
+    items: list[str]
 
 
 def _is_action_line(line: str) -> bool:
@@ -29,6 +47,27 @@ def _is_action_line(line: str) -> bool:
     if "[ ]" in stripped or "[todo]" in stripped:
         return True
     return False
+
+
+def _dedupe_preserve_order(items: Iterable[str]) -> List[str]:
+    """Return ``items`` with case-insensitive duplicates removed, preserving order.
+
+    Empty / whitespace-only entries are dropped. The first surface form
+    encountered for a given lowercased value is kept (e.g. for the input
+    ``["Write tests", "write tests"]`` the result is ``["Write tests"]``).
+    """
+    seen: set[str] = set()
+    unique: List[str] = []
+    for item in items:
+        cleaned = item.strip()
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        unique.append(cleaned)
+    return unique
 
 
 def extract_action_items(text: str) -> List[str]:
@@ -54,16 +93,80 @@ def extract_action_items(text: str) -> List[str]:
                 continue
             if _looks_imperative(s):
                 extracted.append(s)
-    # Deduplicate while preserving order
-    seen: set[str] = set()
-    unique: List[str] = []
-    for item in extracted:
-        lowered = item.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        unique.append(item)
-    return unique
+    return _dedupe_preserve_order(extracted)
+
+
+_LLM_SYSTEM_PROMPT = """\
+You extract action items from free-form notes, meeting minutes, and similar text.
+
+An "action item" is a concrete task or next step. Recognize them when they appear as:
+  - bulleted or numbered list items (e.g. "- write tests", "1. Update docs")
+  - lines prefixed with "todo:", "action:", or "next:"
+  - markdown checkboxes ("[ ] ...", "[todo] ...")
+  - imperative sentences (e.g. "Investigate the API timeout", "Refactor the parser")
+
+Rules:
+  - Return ONLY items that appear in the input text. Do not invent tasks.
+  - If there are no action items, return an empty list.
+  - Strip bullet, number, and checkbox markers from each item; preserve the
+    original wording otherwise.
+  - Respond with JSON matching the provided schema.
+"""
+
+
+def extract_action_items_llm(text: str) -> List[str]:
+    """Extract action items from free-form text using an LLM via Ollama.
+
+    Drop-in alternative to :func:`extract_action_items` that delegates the
+    classification to a local LLM. Uses Ollama's structured-outputs feature
+    (https://ollama.com/blog/structured-outputs) with the
+    :class:`ActionItemList` Pydantic schema to constrain the response to a
+    JSON object containing a list of strings.
+
+    Error policy: on any LLM-side failure (daemon unreachable, model not
+    pulled, malformed structured output) this function falls back to the
+    heuristic :func:`extract_action_items` rather than raising. The failure
+    is logged at WARNING level so it is observable but doesn't break the
+    request path.
+
+    Args:
+        text: Free-form notes / meeting transcript / etc.
+
+    Returns:
+        List of deduplicated action item strings, in the order the LLM
+        returned them. Returns an empty list for empty / whitespace input
+        without calling the LLM.
+    """
+    if not text or not text.strip():
+        return []
+
+    if len(text) > MAX_INPUT_CHARS:
+        text = text[:MAX_INPUT_CHARS]
+
+    messages = [
+        {"role": "system", "content": _LLM_SYSTEM_PROMPT},
+        {"role": "user", "content": text},
+    ]
+
+    try:
+        response = chat(
+            model=OLLAMA_MODEL,
+            messages=messages,
+            format=ActionItemList.model_json_schema(),
+            options={"temperature": 0},
+        )
+        # Narrow the union to ChatResponse: chat() can also return a streaming
+        # iterator when stream=True, but we never pass stream=True here.
+        assert isinstance(response, ChatResponse)
+        parsed = ActionItemList.model_validate_json(response.message.content)
+    except (ConnectionError, ResponseError, ValidationError) as exc:
+        logger.warning(
+            "LLM extraction failed (%s); falling back to heuristic extractor",
+            type(exc).__name__,
+        )
+        return extract_action_items(text)
+
+    return _dedupe_preserve_order(parsed.items)
 
 
 def _looks_imperative(sentence: str) -> bool:
