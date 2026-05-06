@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     db_path: Path = _DEFAULT_DB_PATH
     ollama_model: str = "llama3.2:3b"
     max_input_chars: int = 50_000
+    log_level: str = "INFO"
 
 
 @functools.lru_cache(maxsize=1)

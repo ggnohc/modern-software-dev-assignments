@@ -12,16 +12,12 @@ longer the source of truth — they are unused fallbacks.
 
 from __future__ import annotations
 
-import logging
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
 from .config import get_settings
-
-
-logger = logging.getLogger(__name__)
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -76,15 +72,16 @@ def _execute(sql: str, params: tuple = ()) -> int:
     Returns ``cursor.lastrowid`` (meaningful for INSERTs; effectively 0 for
     UPDATE/DELETE on a fresh connection — callers that don't care can
     discard the return value).
+
+    Errors propagate. ``sqlite3.Error`` is caught and logged at the
+    application boundary by the global FastAPI exception handler in
+    ``main.py``; per-helper try/except wrappers would just produce
+    duplicate log lines.
     """
-    try:
-        with _connection() as connection:
-            cursor = connection.cursor()
-            cursor.execute(sql, params)
-            return int(cursor.lastrowid or 0)
-    except sqlite3.Error:
-        logger.exception("Database error while executing SQL: %s", sql)
-        raise
+    with _connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(sql, params)
+        return int(cursor.lastrowid or 0)
 
 
 def _execute_many(sql: str, params_seq: list[tuple]) -> list[int]:
@@ -97,41 +94,29 @@ def _execute_many(sql: str, params_seq: list[tuple]) -> list[int]:
     code would roll the whole batch back). This helper preserves the original
     all-or-nothing semantics.
     """
-    try:
-        with _connection() as connection:
-            cursor = connection.cursor()
-            ids: list[int] = []
-            for params in params_seq:
-                cursor.execute(sql, params)
-                ids.append(int(cursor.lastrowid or 0))
-            return ids
-    except sqlite3.Error:
-        logger.exception("Database error while executing SQL: %s", sql)
-        raise
+    with _connection() as connection:
+        cursor = connection.cursor()
+        ids: list[int] = []
+        for params in params_seq:
+            cursor.execute(sql, params)
+            ids.append(int(cursor.lastrowid or 0))
+        return ids
 
 
 def _query_one(sql: str, params: tuple = ()) -> Optional[sqlite3.Row]:
     """Run a SELECT and return one row, or None if there are no matches."""
-    try:
-        with _connection() as connection:
-            cursor = connection.cursor()
-            cursor.execute(sql, params)
-            return cursor.fetchone()
-    except sqlite3.Error:
-        logger.exception("Database error while executing SQL: %s", sql)
-        raise
+    with _connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(sql, params)
+        return cursor.fetchone()
 
 
 def _query_all(sql: str, params: tuple = ()) -> list[sqlite3.Row]:
     """Run a SELECT and return all matching rows."""
-    try:
-        with _connection() as connection:
-            cursor = connection.cursor()
-            cursor.execute(sql, params)
-            return list(cursor.fetchall())
-    except sqlite3.Error:
-        logger.exception("Database error while executing SQL: %s", sql)
-        raise
+    with _connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(sql, params)
+        return list(cursor.fetchall())
 
 
 def init_db() -> None:
@@ -139,35 +124,34 @@ def init_db() -> None:
 
     Uses ``_connection()`` directly rather than ``_execute()`` because this
     is multi-statement DDL setup; the single-statement helpers don't fit
-    cleanly. The exception is still caught and logged at this level.
+    cleanly. ``sqlite3.Error`` from this function is intentionally not
+    caught here: it runs from the lifespan handler at server startup,
+    where a database error means the process should fail loudly rather
+    than start in an inconsistent state.
     """
-    try:
-        with _connection() as connection:
-            cursor = connection.cursor()
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS notes (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    content TEXT NOT NULL,
-                    created_at TEXT DEFAULT (datetime('now'))
-                );
-                """
-            )
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS action_items (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    note_id INTEGER,
-                    text TEXT NOT NULL,
-                    done INTEGER DEFAULT 0,
-                    created_at TEXT DEFAULT (datetime('now')),
-                    FOREIGN KEY (note_id) REFERENCES notes(id)
-                );
-                """
-            )
-    except sqlite3.Error:
-        logger.exception("Database error during init_db schema creation")
-        raise
+    with _connection() as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS action_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                note_id INTEGER,
+                text TEXT NOT NULL,
+                done INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (note_id) REFERENCES notes(id)
+            );
+            """
+        )
 
 
 def insert_note(content: str) -> int:
