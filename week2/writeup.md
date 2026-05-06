@@ -238,15 +238,398 @@ Test design decisions:
    test) or to use `MagicMock` and call `mock.assert_not_called()`.
 
 ### Exercise 3: Refactor Existing Code for Clarity
-Prompt:
+
+I split this exercise into four sub-steps matching the four buckets the
+assignment calls out (API contracts/schemas, DB layer cleanup, app
+lifecycle/configuration, error handling). The first two sub-steps are
+documented below; the remaining two are in progress.
+
+Worth noting up-front: midway through this exercise I realized I had
+been treating it as a Python homework exercise rather than as the
+AI-IDE practice the assignment is actually grading. The Week 2 syllabus
+is "Anatomy of Coding Agents" and the rubric is *10 points for the
+generated code, 10 points for the prompt, per part*. So Step 1 below
+was driven through a more conversational, hint-led workflow, and
+Step 2 onward was driven by writing a single precise prompt and letting
+the agent execute. Both styles produced working code; the second style
+produced more interesting writeup material (deviations, surprises,
+verification gotchas) which is what this exercise is designed to elicit.
+
+#### Step 1: notes.py router → Pydantic request/response models
+
+Prompt(s) used:
 ```
-TODO
+- "Help me with TODO 3 — what does refactoring for well-defined API
+   contracts/schemas look like?"
+- "Walk me through Step 1: create week2/app/schemas.py with
+   CreateNoteRequest and NoteResponse, then refactor week2/app/routers/notes.py
+   to use them."
+- "Please show me the code for Step 1"  (escape hatch for the schemas)
 ```
 
-Generated/Modified Code Snippets:
+Generated / modified code:
+- `week2/app/schemas.py` — *new file*
+  - Module docstring documenting the architectural rule (schemas describe
+    the API surface; storage types must not leak in here).
+  - `CreateNoteRequest` with `model_config = ConfigDict(str_strip_whitespace=True)`
+    and `content: str = Field(..., min_length=1, ...)` — Pydantic now
+    rejects whitespace-only content at parse time, replacing the manual
+    `.strip()` + `if not content` dance.
+  - `NoteResponse` (`id`, `content`, `created_at`).
+- `week2/app/routers/notes.py` — refactored both endpoints
+  - `POST /notes`: signature now `payload: CreateNoteRequest`, decorator
+    has `response_model=NoteResponse`, body shrinks to three lines, and
+    response construction uses `NoteResponse(**dict(note))` so adding
+    a column to the `notes` table doesn't require touching the router.
+  - `GET /notes/{note_id}`: same treatment; the `if row is None: raise
+    HTTPException(404, ...)` line stayed because that is *domain* validation
+    (does this row exist?) which Pydantic cannot do for me. Important
+    distinction worth holding onto: schema validation = shape; domain
+    validation = "is this allowed in our world?".
+  - Removed unused `typing.Any/Dict/List` imports.
+
+Verification:
+- TestClient smoke test covering happy POST, whitespace-only body (now 422
+  instead of 400), missing key (422), wrong type (422), padded valid input
+  (whitespace stripped on the way in), and GET regression. All passed.
+
+Behavior changes for clients:
+- 400 → 422 for empty / whitespace-only / missing `content`. New 422 body
+  is structured Pydantic detail with `type` / `loc` / `msg` instead of the
+  old `{"detail": "content is required"}` string.
+- Happy-path responses are byte-identical.
+
+#### Step 2: action_items.py router → Pydantic request/response models
+
+This step was driven entirely by a single precise prompt to the agent
+rather than a conversational hint-ladder. Prompt verbatim:
+
 ```
-TODO: List all modified code files with the relevant line numbers. (We anticipate there may be multiple scattered changes here – just produce as comprehensive of a list as you can.)
+Refactor week2/app/routers/action_items.py to use Pydantic request and
+response models, following the style established in week2/app/routers/notes.py.
+
+1. In week2/app/schemas.py, add the following models:
+   - ExtractRequest: { text: str (stripped, non-empty), save_note: bool default False }
+   - ExtractedItem: { id: int, text: str }
+   - ExtractResponse: { note_id: int | None, items: list[ExtractedItem] }
+   - ActionItemResponse: { id: int, note_id: int | None, text: str,
+                           done: bool, created_at: str }
+   - MarkDoneRequest: { done: bool default True }
+
+2. Refactor each of the three endpoints in action_items.py to:
+   - accept the request schema as the body parameter
+   - declare response_model= and the return type annotation
+   - construct response models via Schema(**dict(row)) where applicable
+   - delete now-redundant manual validation (e.g., the manual
+     "if not text: raise HTTPException(400)")
+
+3. Remove unused imports from typing (Any, Dict).
+
+Do not touch week2/app/db.py — that is a separate refactor step.
+
+After making changes, list the files you modified and any behavior changes
+clients might observe (e.g., 400 -> 422 on invalid input).
 ```
+
+Generated / modified code:
+- `week2/app/schemas.py` — appended six new models (ExtractRequest,
+  ExtractedItem, ExtractResponse, ActionItemResponse, MarkDoneRequest,
+  and one bonus model — see "agent deviation" below).
+- `week2/app/routers/action_items.py` — fully rewritten:
+  - `POST /extract` now takes `ExtractRequest`, returns `ExtractResponse`.
+    Manual `payload.get("text", "").strip()` and the manual 400 check
+    are gone — Pydantic does it.
+  - `GET ""` returns `list[ActionItemResponse]`. The manual
+    `bool(r["done"])` cast is gone; Pydantic v2 coerces 0/1 → False/True
+    for `bool`-typed fields automatically.
+  - `POST /{action_item_id}/done` takes `MarkDoneRequest`, returns
+    `MarkDoneResponse`.
+  - All `typing.Any/Dict/List/Optional` imports removed; `int | None`
+    syntax used throughout.
+
+Where the agent diverged from spec (good catch — read the diff, kids):
+- I asked for five new schemas. The agent added a sixth, `MarkDoneResponse`
+  (`{id: int, done: bool}`), so the third endpoint would have a typed
+  response like the others. It flagged this in its summary rather than
+  silently slipping it in. I accepted it because consistency across
+  endpoints is more valuable than strict adherence to my list, but it's
+  a useful reminder that agents will fill in "obvious" gaps you didn't
+  specify.
+
+Surprise during verification:
+- I assumed `save_note: "yes"` would trigger 422. It actually returns
+  200 — Pydantic v2 in lax mode accepts `"yes"`/`"no"`, `"on"`/`"off"`,
+  `"y"`/`"n"`, `"true"`/`"false"`, and `"1"`/`"0"` as valid bools. Strings
+  outside that vocabulary (e.g., `"maybe"`) do raise 422. If I wanted
+  strict bool parsing I'd need `Strict[bool]` or a custom validator.
+  Documented for future tightening, not changed for now.
+
+Verification gotcha (not a server bug, captured for the writeup grade):
+- The `curl ... | jq    # expect 422` pattern from the verification
+  snippet failed in zsh because interactive comments are off by default
+  (`setopt INTERACTIVE_COMMENTS` would enable them). zsh passed `#`,
+  `expect`, `422` as literal arguments to jq, producing
+  `jq: error: Top-level program not given (try ".")` — which *looked*
+  like a server bug but wasn't. Re-running with
+  `curl -s -o /dev/null -w '%{http_code}\n' ...` and `curl -i ...`
+  confirmed both negative cases returned 422 with structured Pydantic
+  detail bodies. Lesson: when an AI-suggested verification command
+  appears to fail, distinguish "tool error" from "system-under-test error"
+  before changing the system.
+
+Behavior changes for clients:
+- 400 → 422 on empty / missing / whitespace `text`, with structured
+  detail body.
+- `save_note` and `done` are now typed bools; values outside Pydantic's
+  bool vocabulary return 422.
+- Happy-path response shapes are byte-identical to the pre-refactor JSON.
+
+#### Step 3: db.py → context-manager + helper pattern
+
+Prompt verbatim (single shot to the agent in Cursor):
+
+```
+Refactor week2/app/db.py to clean up the database layer. Keep the file's
+public function signatures unchanged so the routers don't need to change.
+
+Goals:
+
+1. Fix the connection-leak. The current `with get_connection() as connection:`
+   only commits/rolls-back the transaction; it does NOT close the connection
+   (this is a sqlite3 quirk). Replace it with a contextlib.contextmanager
+   helper named `_connection()` that:
+     - opens the connection,
+     - sets row_factory = sqlite3.Row,
+     - yields it,
+     - calls connection.close() in a finally block.
+
+2. Reduce the repeated boilerplate. Add small private helpers in db.py:
+     - `_execute(sql, params=()) -> int`: runs a single INSERT/UPDATE
+       inside `_connection()`, commits, and returns cursor.lastrowid as int.
+     - `_query_one(sql, params=()) -> sqlite3.Row | None`: runs a SELECT
+       and returns one row or None.
+     - `_query_all(sql, params=()) -> list[sqlite3.Row]`: runs a SELECT
+       and returns all rows.
+   Rewrite the existing public functions in terms of these helpers. The
+   public function signatures and return types must NOT change.
+
+3. Add minimal error handling. Catch sqlite3.Error at the helper level,
+   log via logger.exception(...) (use a module-level
+   logger = logging.getLogger(__name__)), and re-raise. Do not swallow.
+   The router layer is not the right place to translate sqlite3.Error
+   into an HTTP response — we will add a global exception handler in a
+   later refactor step. The SQL is fine to log; do NOT log the params.
+
+Out of scope (will be addressed in a later step):
+- Moving init_db() out of import-time.
+- Making DB_PATH configurable via environment / pydantic-settings.
+- Adding a global FastAPI exception handler for sqlite3.Error.
+- Replacing sqlite3.Row with Pydantic models at the boundary.
+
+After making changes:
+- Confirm no public function signatures changed (compare before/after).
+- List behavior changes clients might observe (there should be none for
+  happy paths; the only visible difference should be a logged exception
+  on database errors).
+- Do not modify any router or test files.
+```
+
+Generated / modified code:
+- `week2/app/db.py` — full rewrite around four (one more than the prompt
+  asked for — see below) helpers, all wrapped in a closing context manager.
+  - New module docstring explaining the connection-leak fix.
+  - New `_connection()` `@contextmanager` that closes in `finally`. The
+    plain `with sqlite3.Connection` only commits/rolls back; it doesn't
+    close. This is the kind of footgun you only catch by reading the
+    sqlite3 docs carefully.
+  - New `_execute`, `_query_one`, `_query_all` helpers, each catching
+    `sqlite3.Error`, calling `logger.exception("...SQL: %s", sql)` (no
+    params), and re-raising.
+  - Public functions (`insert_note`, `list_notes`, `get_note`, etc.)
+    became one-liners delegating to the helpers.
+
+Where the agent diverged from spec (read carefully — second time it's
+done this):
+- The prompt listed three helpers. The agent added a fourth,
+  `_execute_many(sql, params_seq)`, to preserve the all-or-nothing
+  transaction semantics of `insert_action_items()`. Calling `_execute()`
+  N times would have opened and committed N independent transactions,
+  which is a *behavior change*: a partial-mid-batch failure would leave
+  earlier rows committed, where the original code rolled the whole batch
+  back. The agent caught this on its own and flagged it in its summary
+  rather than silently slipping it in. That's good agent behavior, and
+  it's exactly the same pattern from Step 2 — agents will fill in
+  obvious gaps when the prompt's literal text would change behavior.
+
+Verification:
+- Before/after signature snapshot via `inspect.signature` — all 9 public
+  functions unchanged.
+- Functional smoke test through every public function (init_db,
+  insert_note, get_note, list_notes, insert_action_items,
+  list_action_items, mark_action_item_done) plus an error-path test
+  with bad SQL. The error path correctly logged
+  `"Database error while executing SQL: ..."` with traceback and
+  re-raised the original `sqlite3.OperationalError`.
+- End-to-end TestClient regression covering all router endpoints. All
+  responses byte-identical to pre-refactor JSON.
+
+Behavior changes for clients:
+- Happy path: none.
+- Error path: improved observability — DB errors now produce an
+  ERROR-level log line with the SQL and traceback. Re-raised
+  unchanged so FastAPI's default 500 behavior is preserved (the
+  *next* slice replaces this with a structured handler).
+
+#### Step 4: app lifecycle + configuration via pydantic-settings
+
+This step had two tightly coupled goals: stop running `init_db()` at
+import time, and centralize all environment-driven configuration in a
+single Settings object. Single prompt to the agent (see writeup history
+in the Cursor chat for the full text — abbreviated here).
+
+Key prompt instructions:
+- Add `pydantic-settings` as a dependency.
+- New module `week2/app/config.py` with a `Settings(BaseSettings)` class
+  (`db_path`, `ollama_model`, `max_input_chars`) and an
+  `@lru_cache(maxsize=1)`-decorated `get_settings()` accessor.
+- `env_prefix="APP_"` so env vars are `APP_DB_PATH` etc. (avoids
+  collisions with system / SDK env vars).
+- `db.py` must read `get_settings().db_path` at *call time* — that's
+  what makes test overrides work.
+- `extract.py`: drop the top-level `OLLAMA_MODEL`/`MAX_INPUT_CHARS`
+  constants and the `load_dotenv()` call; read both via
+  `get_settings()` at call time.
+- `main.py`: replace the import-time `init_db()` call with a FastAPI
+  `lifespan` async context manager.
+- The single allowed test edit: `test_extract.py` imports `OLLAMA_MODEL`
+  and asserts on it; replace with `get_settings().ollama_model`.
+
+Generated / modified code:
+- New file `week2/app/config.py` with `Settings(BaseSettings)` and
+  `@functools.lru_cache(maxsize=1)` `get_settings()`. Module docstring
+  documents the env-prefix convention and the cache-clear pattern for
+  tests.
+- `week2/app/db.py` — `BASE_DIR`/`DATA_DIR`/`DB_PATH` retained as
+  deprecated fallbacks (per prompt) but no longer the source of truth;
+  `ensure_data_directory_exists` and both connection paths now read
+  `get_settings().db_path`.
+- `week2/app/services/extract.py` — removed the top-level constants and
+  `load_dotenv()`; `extract_action_items_llm()` reads from settings
+  at call time.
+- `week2/app/main.py` — top-level `init_db()` deleted; new `lifespan`
+  async context manager logs startup/shutdown and runs `init_db()`.
+- `week2/tests/test_extract.py` — single one-line change to swap
+  `OLLAMA_MODEL` for `get_settings().ollama_model`.
+- `pyproject.toml` / `poetry.lock` — `pydantic-settings = "^2.14.0"`.
+
+Verification:
+- All 7 unit tests pass after the symbol swap.
+- Setting `APP_DB_PATH=/tmp/.../override.db` and starting the app via
+  `TestClient(app)` causes that file to be created — proving the
+  override flows all the way through to the actual sqlite3.connect call.
+- The DB file does NOT exist immediately after `from week2.app.main import app`;
+  it only appears after `TestClient(app).__enter__()` (i.e. after the
+  lifespan startup runs). This is the precise behavior we wanted: no
+  more import-time side effects.
+
+Behavior changes for clients:
+- Happy paths byte-identical.
+- The DB file is no longer created at import time. Tools that import
+  `week2.app.main` (test runners, doc generators, schema extractors)
+  no longer trigger schema creation as a side effect.
+
+Things flagged for follow-up:
+- `python-dotenv` is now redundant — `pydantic-settings` reads `.env`
+  directly via `env_file=".env"`. Left in `pyproject.toml` for now.
+- `BASE_DIR`/`DATA_DIR`/`DB_PATH` are dead code paths in `db.py`.
+  Kept per prompt; future cleanup.
+- `@lru_cache` on `get_settings()` is global state. Tests that mutate
+  the environment must call `get_settings.cache_clear()` for the
+  override to take effect. Documented in the module docstring.
+
+#### Step 5: error handling + structured logging
+
+Final TODO 3 slice. Goal: replace the bare 500-with-exception-text
+behavior with a structured `{"detail": "internal database error"}`
+response, add process-wide log configuration, and consolidate the
+per-helper logging into a single global handler.
+
+Key prompt instructions:
+- New module `week2/app/logging_config.py` with a
+  `configure_logging(level)` helper using `logging.config.dictConfig`
+  (NOT `basicConfig`, which is a no-op once uvicorn's handlers exist),
+  `disable_existing_loggers=False` (so uvicorn's own loggers stay
+  intact), and the format
+  `"%(asctime)s %(levelname)-8s %(name)s :: %(message)s"`.
+- Add `log_level: str = "INFO"` to `Settings`.
+- Add a global `sqlite3.Error` exception handler in `main.py` that
+  returns `JSONResponse(500, {"detail": "internal database error"})`
+  and logs via `logger.exception(...)` with method + path (NOT body /
+  query params, which may contain user content).
+- Strip the four `try/except sqlite3.Error: logger.exception(...); raise`
+  wrappers from `db.py` — the global handler now owns logging for these
+  errors, and keeping both produces duplicate log lines.
+- Call `configure_logging(level=get_settings().log_level)` as the first
+  step in the lifespan, before `init_db()`, so startup output is
+  consistently formatted.
+
+Generated / modified code:
+- New file `week2/app/logging_config.py` with `configure_logging()`.
+  Eager-validates the level name (typos like `"INF0"` raise loudly at
+  startup rather than silently falling back to `WARNING`).
+- `week2/app/config.py` — added `log_level: str = "INFO"`.
+- `week2/app/db.py` — removed all four helper-level `try/except`
+  wrappers and the wrapper around `init_db`. The helpers are now just
+  the SQL execution. Removed the now-unused `import logging` and
+  module-level `logger`.
+- `week2/app/main.py` — added the `sqlite3.Error` exception handler;
+  registered via `app.add_exception_handler`; lifespan now calls
+  `configure_logging` before `init_db`.
+
+Surprise during verification (this is the gold for the writeup):
+- First attempt: the response was correct (`{"detail": "internal
+  database error"}`, status 500) and the log line appeared in the
+  configured format — but **no traceback**. Logs read
+  `Unhandled sqlite3.Error on GET /action-items` and that was it.
+- Root cause: `logger.exception(msg)` defaults to `exc_info=True`,
+  which means "use `sys.exc_info()`". But FastAPI/Starlette's
+  exception-handler dispatch happens *outside* the original `except`
+  block — by the time our handler runs, `sys.exc_info()` returns
+  `(None, None, None)` and the traceback is silently dropped.
+- Fix: pass the exception object explicitly. The handler now uses
+  `logger.error(..., exc_info=exc)`, which the logging module unwraps
+  into `(type(exc), exc, exc.__traceback__)`. Inline comment in
+  `main.py` documents the trap so the next person doesn't break it.
+- Lesson: AI-generated code that *looks* correct can still drop
+  observability data on the floor in non-obvious ways. The prompt's
+  verification step ("trigger a sqlite3.Error and confirm the server
+  log contains an ERROR line with traceback") was the only thing that
+  caught this. Without that explicit check, the bug would have shipped
+  and we'd have been blind to DB errors in production.
+
+Verification:
+- All 7 unit tests still pass.
+- Triggered `sqlite3.Error` (corrupted DB file with garbage bytes,
+  then `GET /action-items`):
+  - response status: 500
+  - response body: `{"detail": "internal database error"}` (verified
+    no SQL or exception text leaked)
+  - server log: ERROR-level line in the configured format, plus the
+    full traceback through `routers/action_items.py` →
+    `db.py:_query_all` → `cursor.execute` → `sqlite3.DatabaseError:
+    file is not a database`.
+- Startup log line uses the configured format:
+  `2026-05-06 16:57:53,892 INFO     week2.app.main :: Application
+  startup: initializing database schema`.
+
+Behavior changes for clients:
+- 500 responses are now structured (`{"detail": "internal database error"}`)
+  instead of bare exception text. Clients can rely on the JSON shape
+  without parsing free-form messages.
+- DB errors are logged exactly once (at the handler) instead of twice
+  (per-helper + via FastAPI's default). Identical information density,
+  less noise.
+- Happy paths: still byte-identical.
 
 
 ### Exercise 4: Use Agentic Mode to Automate a Small Task
