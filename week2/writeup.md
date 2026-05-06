@@ -799,15 +799,119 @@ Behavior changes for clients:
 
 
 ### Exercise 5: Generate a README from the Codebase
-Prompt:
+
+The prompt for this exercise was deliberately heavily-spec'd because
+README generation is the kind of task where agents over-deliver: badges,
+contributor sections, license stubs, "Made with FastAPI" banners, and
+duplicate setup instructions all show up uninvited. The constraints in
+the prompt below were explicit about what NOT to include for that
+reason.
+
+Prompt verbatim:
+
 ```
-TODO
+Generate a README.md for the week 2 assignment, located at
+`week2/README.md`. The audience is another developer who has just
+cloned the repo, has Python/venv/Poetry installed (per the top-level
+README), and wants to run, test, or contribute to the action item
+extractor.
+
+Required sections, in this order:
+
+1. Title + one-paragraph overview
+   - "Action Item Extractor" or similar.
+   - One paragraph: a small FastAPI + SQLite app that converts free-form
+     notes into a checklist of action items. Two extraction strategies
+     are available — a heuristic (regex/imperative) and an LLM-powered
+     one via local Ollama — and the LLM path falls back to the heuristic
+     if Ollama is unreachable.
+
+2. Quick start
+   - Prerequisite: link to the top-level README for environment setup
+     (`../README.md`), and remind the reader to activate the venv in
+     every new terminal.
+   - The single command to run the dev server.
+   - The URL.
+   - One-sentence note: the SQLite database file is created automatically
+     on first server start (via the FastAPI lifespan).
+
+3. Optional: enable LLM extraction
+   - Brief explanation that the /action-items/extract-llm endpoint
+     calls a local Ollama daemon. Without it, the endpoint silently
+     returns heuristic results plus a warning log.
+   - Three commands: `ollama serve`, `ollama pull llama3.2:3b`, and
+     a `curl` to confirm the model is reachable.
+
+4. Configuration
+   - Markdown table: APP_DB_PATH, APP_OLLAMA_MODEL, APP_MAX_INPUT_CHARS,
+     APP_LOG_LEVEL — each with the actual default from config.py.
+
+5. API
+   - Markdown table covering all 8 endpoints currently exposed.
+   - Read the routers to confirm the routes — do not invent endpoints.
+
+6. Running tests
+   - Single command + one sentence on what's covered.
+
+7. Project layout
+   - Small file tree showing the relevant files (not every file).
+
+8. Notes for grading / context (one short paragraph)
+   - This was developed for CS146S using Cursor + Claude.
+   - Implementation, design decisions, and prompts are documented in
+     week2/writeup.md.
+
+Constraints:
+- Markdown only.
+- Code blocks must specify the language.
+- Do not include shields/badges, contributor sections, or licenses.
+- Do not document private helpers (anything starting with `_`).
+- Do not duplicate Pydantic field documentation that is already
+  available via /docs.
+- Do not duplicate the Python/venv/Poetry setup steps from the
+  top-level README — link to it instead.
+- No "TODO" placeholders.
+
+Verification:
+- Every command works when copy-pasted from a fresh shell.
+- The endpoint table matches the actual routes
+  (`curl http://127.0.0.1:8000/openapi.json | jq '.paths | keys'`).
+- The env-var table matches the fields actually defined in
+  week2/app/config.py.
 ```
 
-Generated Code Snippets:
-```
-TODO: List all modified code files with the relevant line numbers.
-```
+Generated / modified code:
+- `week2/README.md` (new file, ~120 lines). Eight sections in the order
+  the prompt specified: overview → quick start → optional Ollama →
+  configuration table → API table → tests → project layout →
+  architecture notes pointer back to this writeup.
+- The "Architecture notes" section at the end was a small over-delivery
+  beyond the prompt's eight required sections — a four-bullet summary
+  of the patterns established during the TODO 3 refactor (config as
+  source of truth, no import-time side effects, schemas-not-storage,
+  error path consolidation). I judged it worth keeping because each
+  bullet links forward to a specific writeup section and helps a reader
+  decide whether they need to read more before contributing.
+
+Verification performed:
+- Ran the suggested OpenAPI cross-check by spinning up the app via
+  TestClient and reading `/openapi.json`. Output was exactly the eight
+  endpoints listed in the README's API table — no inventions, no
+  omissions.
+- The four `APP_*` env vars in the README match the four fields on
+  `Settings` in `week2/app/config.py` (`db_path`, `ollama_model`,
+  `max_input_chars`, `log_level`). Defaults match.
+- The project tree matches the actual layout. No imaginary files.
+
+Things deliberately left out (would have bloated the README):
+- A "Troubleshooting" section. Most issues (port in use, venv not
+  activated, Ollama not running) either announce themselves clearly
+  in the error message or are covered by the existing log lines.
+- Badges, license, contributor section. Coursework, not a library.
+- Field-by-field schema documentation. `/docs` already provides this
+  with better fidelity than markdown could.
+
+Behavior changes for clients: none — README is documentation.
 
 
 ## SUBMISSION INSTRUCTIONS
