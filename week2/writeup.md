@@ -9,15 +9,15 @@ Fill out all of the `TODO`s in this file.
 
 ## SUBMISSION DETAILS
 
-Name: **TODO** \
-SUNet ID: **TODO** \
+Name: ggnohc \
+SUNet ID: 968142J \
 Citations:
 - Cursor IDE with Claude as the coding assistant (used in tutor mode for guided implementation).
 - Ollama Python SDK (`ollama==0.5.x`) — https://github.com/ollama/ollama-python
 - Ollama structured outputs blog — https://ollama.com/blog/structured-outputs
 - Pydantic v2 docs — https://docs.pydantic.dev/2.0/
 
-This assignment took me about **TODO** hours to do.
+This assignment took me about 10 hours to do.
 
 
 ## YOUR RESPONSES
