@@ -3,11 +3,11 @@ from pytest import LogCaptureFixture
 from unittest.mock import MagicMock
 from ollama import ChatResponse, Message
 
+from ..app.config import get_settings
 from ..app.services.extract import (
     extract_action_items,
     extract_action_items_llm,
     ActionItemList,
-    OLLAMA_MODEL,
 )
 
 
@@ -111,7 +111,7 @@ def test_llm_extract_bullet_list(monkeypatch):
     fake_chat.assert_called_once()
     kwargs = fake_chat.call_args.kwargs
     assert kwargs["messages"][1]["content"] == "* action item 1\n* action item 2"
-    assert kwargs["model"] == OLLAMA_MODEL
+    assert kwargs["model"] == get_settings().ollama_model
     assert kwargs["format"] == ActionItemList.model_json_schema()
     assert kwargs["options"] == {"temperature": 0}
 

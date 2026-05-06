@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from collections.abc import Iterable
 from typing import List
 
-from dotenv import load_dotenv
 from ollama import ChatResponse, ResponseError, chat
 from pydantic import BaseModel, ValidationError
 
-logger = logging.getLogger(__name__)
+from ..config import get_settings
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
 BULLET_PREFIX_PATTERN = re.compile(r"^\s*([-*•]|\d+\.)\s+")
 KEYWORD_PREFIXES = (
@@ -20,9 +18,6 @@ KEYWORD_PREFIXES = (
     "action:",
     "next:",
 )
-
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-MAX_INPUT_CHARS = 50_000
 
 
 class ActionItemList(BaseModel):
@@ -140,8 +135,9 @@ def extract_action_items_llm(text: str) -> List[str]:
     if not text or not text.strip():
         return []
 
-    if len(text) > MAX_INPUT_CHARS:
-        text = text[:MAX_INPUT_CHARS]
+    settings = get_settings()
+    if len(text) > settings.max_input_chars:
+        text = text[: settings.max_input_chars]
 
     messages = [
         {"role": "system", "content": _LLM_SYSTEM_PROMPT},
@@ -150,7 +146,7 @@ def extract_action_items_llm(text: str) -> List[str]:
 
     try:
         response = chat(
-            model=OLLAMA_MODEL,
+            model=settings.ollama_model,
             messages=messages,
             format=ActionItemList.model_json_schema(),
             options={"temperature": 0},

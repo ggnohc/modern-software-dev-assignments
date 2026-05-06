@@ -1,3 +1,15 @@
+"""SQLite database access layer.
+
+The runtime database path is sourced from :func:`week2.app.config.get_settings`
+``.db_path`` at *call time*, not at module-import time. This is what makes
+test overrides work: setting ``APP_DB_PATH`` and clearing the settings cache
+takes effect on the next operation, with no module-attribute monkey-patching.
+
+The ``BASE_DIR``, ``DATA_DIR``, and ``DB_PATH`` symbols below are retained
+for backward compatibility (other code or tests may import them) but are no
+longer the source of truth — they are unused fallbacks.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -5,6 +17,8 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
+
+from .config import get_settings
 
 
 logger = logging.getLogger(__name__)
@@ -16,7 +30,8 @@ DB_PATH = DATA_DIR / "app.db"
 
 
 def ensure_data_directory_exists() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    """Create the parent directory of the configured DB path if needed."""
+    get_settings().db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def get_connection() -> sqlite3.Connection:
@@ -30,7 +45,7 @@ def get_connection() -> sqlite3.Connection:
     OS file descriptor on every database operation.)
     """
     ensure_data_directory_exists()
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(get_settings().db_path)
     connection.row_factory = sqlite3.Row
     return connection
 
@@ -46,7 +61,7 @@ def _connection() -> Iterator[sqlite3.Connection]:
         not provide for free.
     """
     ensure_data_directory_exists()
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(get_settings().db_path)
     connection.row_factory = sqlite3.Row
     try:
         with connection:
