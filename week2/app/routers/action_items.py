@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Callable, List
+
 from fastapi import APIRouter
 
 from .. import db
@@ -11,24 +13,48 @@ from ..schemas import (
     MarkDoneRequest,
     MarkDoneResponse,
 )
-from ..services.extract import extract_action_items
+from ..services.extract import extract_action_items, extract_action_items_llm
 
 
 router = APIRouter(prefix="/action-items", tags=["action-items"])
 
 
-@router.post("/extract", response_model=ExtractResponse)
-def extract(payload: ExtractRequest) -> ExtractResponse:
+def _run_extract(
+    payload: ExtractRequest,
+    extractor: Callable[[str], List[str]],
+) -> ExtractResponse:
+    """Shared body for the heuristic and LLM extract endpoints.
+
+    Both endpoints accept the same request, persist optionally, run an
+    extractor over the text, and return the same response shape. The only
+    thing that varies is which extractor function is called.
+    """
     note_id: int | None = None
     if payload.save_note:
         note_id = db.insert_note(payload.text)
 
-    items = extract_action_items(payload.text)
+    items = extractor(payload.text)
     ids = db.insert_action_items(items, note_id=note_id)
     return ExtractResponse(
         note_id=note_id,
         items=[ExtractedItem(id=i, text=t) for i, t in zip(ids, items)],
     )
+
+
+@router.post("/extract", response_model=ExtractResponse)
+def extract(payload: ExtractRequest) -> ExtractResponse:
+    return _run_extract(payload, extract_action_items)
+
+
+@router.post("/extract-llm", response_model=ExtractResponse)
+def extract_llm(payload: ExtractRequest) -> ExtractResponse:
+    """Like /extract, but classifies via a local LLM (Ollama).
+
+    On any LLM-side failure, ``extract_action_items_llm`` falls back to the
+    heuristic extractor and logs a warning — the response shape is unchanged
+    so clients don't need to handle that case specially.
+    """
+    return _run_extract(payload, extract_action_items_llm)
 
 
 @router.get("", response_model=list[ActionItemResponse])

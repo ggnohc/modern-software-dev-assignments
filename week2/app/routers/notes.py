@@ -16,6 +16,12 @@ def create_note(payload: CreateNoteRequest) -> NoteResponse:
     return NoteResponse(**dict(note))
 
 
+@router.get("", response_model=list[NoteResponse])
+def list_notes() -> list[NoteResponse]:
+    """Return every saved note, newest first."""
+    return [NoteResponse(**dict(r)) for r in db.list_notes()]
+
+
 @router.get("/{note_id}", response_model=NoteResponse)
 def get_single_note(note_id: int) -> NoteResponse:
     row = db.get_note(note_id)
