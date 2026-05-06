@@ -633,15 +633,169 @@ Behavior changes for clients:
 
 
 ### Exercise 4: Use Agentic Mode to Automate a Small Task
-Prompt:
+
+Two small features wired up in a single agent invocation: an LLM
+extraction endpoint with its frontend button, and a list-all-notes
+endpoint with its button. The combined prompt was small enough to
+package together — both pieces follow the same shape (new backend
+route + matching frontend button) and the agent had everything it
+needed to wire both consistently.
+
+Prompt verbatim:
+
 ```
-TODO
+Implement TODO 4 of the week 2 assignment: two small features wiring
+new backend endpoints to new frontend buttons.
+
+Feature 1 — LLM extraction endpoint + button
+
+Backend:
+- Add a new endpoint `POST /action-items/extract-llm` to
+  week2/app/routers/action_items.py.
+- It accepts the same ExtractRequest body and returns the same
+  ExtractResponse as the existing `POST /action-items/extract`. Same
+  validation rules, same response_model, same persistence behavior
+  (save_note flag still honored).
+- The only difference: it calls `extract_action_items_llm()` from
+  `week2/app/services/extract.py` instead of `extract_action_items()`.
+- Factor the shared body into a small private helper if it makes the
+  duplication painful, but a tiny copy is fine for two endpoints.
+
+Frontend (week2/frontend/index.html):
+- Add a second button "Extract (LLM)" next to the existing "Extract"
+  button.
+- Wire it to POST to the new endpoint with the same request body shape.
+- The response is identical, so reuse the existing items-rendering code
+  (factor it into a helper function if needed).
+- Show a loading message while the request is in flight.
+- The LLM call is slow (multi-second) — make sure both buttons are
+  disabled while a request is in flight to avoid double-submits, then
+  re-enabled in a finally block.
+
+Feature 2 — List all notes endpoint + button
+
+Backend:
+- Add a new endpoint `GET /notes` to week2/app/routers/notes.py that
+  returns all notes ordered by id descending. Use db.list_notes() (it
+  already exists). Declare `response_model=list[NoteResponse]`.
+
+Frontend:
+- Add a "List Notes" button below the existing controls.
+- Wire it to GET /notes and render each note with its id, content
+  (escape HTML — note content is user-supplied), and created_at.
+
+Out of scope:
+- Pagination on /notes.
+- Editing or deleting notes.
+- Showing each note's associated action items.
+- Restyling the existing UI.
+
+Important security note: when rendering note content in the list-notes
+view, do NOT use innerHTML with raw text. Use textContent or escape
+the string via document.createTextNode / a small escape helper. The
+existing "Extract" rendering already has this issue with item.text —
+feel free to fix it in passing while you're touching the rendering
+code, but flag it as a separate concern in your summary.
 ```
 
-Generated Code Snippets:
-```
-TODO: List all modified code files with the relevant line numbers.
-```
+Generated / modified code:
+
+- `week2/app/routers/action_items.py`
+  - Added `_run_extract(payload, extractor)` private helper (lines 22–42).
+    Both `extract` and `extract_llm` now delegate to it; without the
+    helper the persistence + response-construction logic is copy-pasted
+    across the two endpoints.
+  - Existing `extract` endpoint (line 45) became a one-line delegation;
+    behavior unchanged.
+  - New `extract_llm` endpoint (line 50) — same request/response, calls
+    `extract_action_items_llm` instead of the heuristic.
+
+- `week2/app/routers/notes.py`
+  - Added `list_notes()` route at line 19, returning `list[NoteResponse]`,
+    ordered by id descending (delegated to existing `db.list_notes()`).
+  - Existing `get_single_note` route (now line 24) updated with explicit
+    `response_model=NoteResponse` for symmetry with the others.
+
+- `week2/frontend/index.html` — full rewrite of the `<script>` block:
+  - `withButtonsDisabled(fn)` helper guards every button click against
+    double-submit while async work is in flight. The LLM call is the
+    main motivator (5–15s on local hardware), but every button now
+    routes through it for consistency.
+  - `renderItems(items)` and `renderNotes(notes)` both use
+    `document.createElement` + `textContent` exclusively — no
+    innerHTML interpolation anywhere in the file.
+  - `runExtract(endpoint)` is shared between the two extract buttons;
+    only the URL differs.
+  - "Extract (LLM)" button next to the original "Extract" button.
+  - "Saved Notes" section with "List Notes" button below the extract
+    controls; renders each note as a list item with id, timestamp, and
+    content (the `<pre>`-like styling preserves whitespace in the
+    original note text).
+  - Light CSS additions for the notes list and a `[disabled]` style on
+    buttons.
+
+Where the agent diverged from spec (third time the pattern repeats —
+worth tracking for the writeup grade):
+
+- The prompt offered the option of factoring `_run_extract` into a
+  helper "if it makes the duplication painful" but said "a tiny copy
+  is fine." The agent chose to factor anyway, judging that two routes
+  with three near-identical lines each was already over the threshold.
+  Reasonable call, slightly more code than the prompt's minimum, and
+  the helper is short enough that the cost is low.
+
+Surprise / writeup gold: closing a real XSS while shipping a feature.
+
+The original frontend interpolated user-supplied `item.text` into
+`innerHTML` via a template string. A note containing
+`<img src=x onerror=alert(1)>` would have executed in any browser.
+The prompt explicitly asked for `textContent` in *new* code and
+flagged the existing vulnerability as a separate concern; the agent
+elected to fix the existing path too, since rewriting the rendering
+helper made the old code dead anyway. The new render path uses safe
+DOM construction throughout. Verified with a deliberately malicious
+note (`"<script>alert(1)</script>"` in the textarea, saved, then
+listed): the string round-trips through SQLite unchanged and renders
+as literal text — no script execution.
+
+This is the kind of side-effect win that's worth being deliberate
+about: when a prompt touches a critical path, asking the agent to
+"fix it in passing while you're here" trades a small scope creep for
+a real security improvement. The cost was zero — the safe pattern is
+the same number of lines as the unsafe one, just structured
+differently.
+
+Verification:
+- All 7 unit tests pass (the test file was not touched in this slice).
+- TestClient regression on existing endpoints: POST /notes (incl. with
+  HTML payload), POST /action-items/extract, plus the negatives — all
+  unchanged.
+- New endpoint smoke test:
+  - `GET /notes` returns `list[NoteResponse]`, ordered by id desc.
+  - `POST /action-items/extract-llm` with mocked `chat()` returns the
+    expected ExtractResponse shape and proves the LLM code path is
+    actually hit (`fake_chat.called == True`).
+  - Validation negatives on the new LLM endpoint (`{}`, `{"text":"   "}`)
+    return 422 — request schema is shared with the heuristic endpoint
+    so behavior is identical.
+
+Browser-flow verification (manual, not captured here):
+- Both Extract buttons disable themselves and the List Notes button
+  during their requests, re-enable in `finally`.
+- "Saved Notes" section populates correctly when List Notes is clicked.
+- A note saved with `<script>alert(1)</script>` content displays as
+  literal text — no alert dialog.
+- With Ollama stopped (`pkill ollama`), Extract (LLM) still returns
+  results (heuristic fallback) and the server log shows the
+  `LLM extraction failed (ConnectionError); falling back to heuristic
+  extractor` warning. Resilience pattern from TODO 1 is inherited
+  cleanly by the new endpoint.
+
+Behavior changes for clients:
+- `POST /action-items/extract` and `GET /notes/{id}` are unchanged.
+- Two new endpoints (`POST /action-items/extract-llm`, `GET /notes`)
+  are now available. OpenAPI docs at `/docs` automatically list them.
+- The frontend page now has two extract buttons and a notes section.
 
 
 ### Exercise 5: Generate a README from the Codebase
